@@ -18,6 +18,40 @@ Este guia acompanha o `mapear_figuras.py`. O script diz **onde** está cada prob
 
 ---
 
+## 1b. Onde estão os scripts deste projeto (pasta `E:\Fitoplancton`)
+
+Estrutura levantada em 28/08/2026 (mapa da skill do projeto). **Atenção:** a tabela "figura → script" da análise anterior usava nomes hipotéticos (`01_mapa_localizacao.R`, `10_modelos_contagem.R`, `18_TITAN2.R`...) que **não existem**. Os scripts reais são estes:
+
+| Onde | O que tem | Observação |
+|---|---|---|
+| `fitoplancton_consolidado\` | Pipeline `00_preparar_matrizes.R` … `15_modelos_nulos_FD.R`; `99_figures_english.R`, `99_pub_design.R`, `run_all_figures.R`; `fig01_M1_mapa_area_estudo.R`, `fig01_mapas_M1_M2.R`, `fig04_M1_glm_predictions.R`, `fig07_M2_CWM_profiles.R`; `functional_traits_analysis.R`, `land_use_functional_traits.R`, `graphical_abstract.R` | Versão de trabalho mais completa. `README_analises_R.md` dá a ordem de execução. Os resultados ficam em `saidas\*.txt`. |
+| `SM_dados_totais\Scripts\` | Espelho do pipeline para o material suplementar | Pode ter divergido. O auditor compara as cópias e avisa (seção 11). |
+| `plano guilherme\` | `analise_fito_lajeado_AEM.R`, `…_CORRIGIDO_FINAL.R`, `…_PRONTO.R`, `…_PCA_ripario.R.txt`, `analise_fito_CORRIGIDO.R.txt`, `pipeline_R.R`, `exportar_dados_mapas.R`; mapas em Python (`mapas_espaciais_*.py`, `mapas_bacia_completo.py`, `ffg_pc2_map.py`) | Cinco variantes do mesmo script. `COMECE_AQUI.txt` e `SUMARIO_ANALISES_CORRIGIDAS.md` indicam a versão final. |
+
+Correspondência provável **análise → script**, a ser confirmada pelo auditor (coluna "script" do `03_figuras_no_relatorio.csv`):
+
+| Análise do relatório | Script provável | Resultado em texto |
+|---|---|---|
+| Matrizes L/Q/R | `00_preparar_matrizes.R` | `dados_R\matrizes.RData` |
+| Uso do solo, PCA de uso | `06_uso_solo.R` | `uso_solo_*.txt`, `varpart_landuse.txt` |
+| Espaço funcional, CWM, PCoA, PERMANOVA | `09_CWM_PCoA_PERMANOVA.R` | `PERMANOVA_CWM.txt`, `CWM_*.txt` |
+| SES / modelos nulos | `15_modelos_nulos_FD.R` | `SES_diversidade_funcional.txt` |
+| Mapa da área de estudo | `fig01_M1_mapa_area_estudo.R`, `fig01_mapas_M1_M2.R` (ou QGIS: `plano guilherme\GUIA_QGIS_…`) | — |
+| Predições dos GLMs | `fig04_M1_glm_predictions.R` | `GLM_FD_landuse.txt` |
+| Perfis de CWM | `fig07_M2_CWM_profiles.R` | `CWM_medias_regiao.txt` |
+| Mapas de grupos de risco | `plano guilherme\mapas_espaciais_CORRIGIDO.py` | — |
+| AEM (transporte rio abaixo) | `plano guilherme\analise_fito_lajeado_AEM.R` | **não encontrado em `saidas\`**: provavelmente não foi rodado até o fim |
+| Beta, indicadoras, estimadores, Mantel, RLQ | scripts `01`–`15` (nomes não levantados) | `beta_*.txt`, `especies_indicadoras.txt`, `estimadores_riqueza_regiao.txt`, `mantel_resultados.txt`, `RLQ_landuse_summary.txt` |
+
+Os resultados do relatório da CASAN citados na revisão anterior (`resultados_cap14.txt`, `TITAN_limiares_por_taxon.csv`, `grupos_TT_K_prototypes.csv`, `diversidade_funcional_alfa_SES.csv`, `CWM_medias_trecho_corrigido.csv`, `resultados_PCAs.txt`) não aparecem nesse mapa. Devem estar dentro de `Relatório completo Fitoplancton\`, que foi criada depois do levantamento. O `05_resultados_texto.csv` mostra qual script escreve cada um.
+
+**Cuidados já conhecidos neste projeto:**
+- `fitoplancton_consolidado.csv` (74 749 B) e `fitoplancton_consolidado 2.csv` (56 753 B) **não são a mesma matriz**. Confirme qual delas o script de cada figura lê (coluna "entradas" do `01_inventario_scripts.csv`).
+- A fração espacial (AEM) não entrou na partição de variância. Se o relatório atribui a variância não explicada ao "transporte passivo", isso é interpretação e não resultado medido. Diga isso nas Limitações.
+- Marcadores editoriais `[please complete ...]`, `[Thesis title]` e afins aparecem na seção 8 do diagnóstico e precisam ser resolvidos.
+
+---
+
 ## 2. Regras gerais de figura em relatório técnico-científico
 
 | Elemento | Regra |

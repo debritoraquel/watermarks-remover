@@ -51,6 +51,9 @@ from pathlib import Path
 SCRIPT_EXT = {".r", ".rmd", ".qmd", ".py"}
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".svg", ".bmp", ".emf", ".wmf", ".pdf"}
 TABLE_EXT = {".csv", ".txt", ".xlsx", ".xls", ".docx", ".rds", ".rdata", ".html", ".tsv"}
+# scripts salvos como texto (ex.: analise_fito_lajeado_PCA_ripario.R.txt) também contam
+SCRIPT_TXT_EXT = (".r.txt", ".py.txt", ".rmd.txt")
+RESULT_DIRS = {"saidas", "resultados", "results", "output", "outputs", "tabelas", "tables"}
 SKIP_DIRS = {".git", "_auditoria_relatorio", "renv", ".Rproj.user", "__pycache__", "node_modules"}
 
 # ---------------------------------------------------------------------------
@@ -99,6 +102,13 @@ ANALISES = [
         "CCA",
         "vegan",
         "variáveis explicativas; inércia explicada; teste por permutação (N)",
+    ),
+    (
+        r"\b(aem|aem\.build\.binary|dbmem|pcnm|mem|listw\.candidates|listw\.select|forward\.sel)\s*\(",
+        "Filtros espaciais (AEM/dbMEM/PCNM)",
+        "adespatial/vegan",
+        "matriz de conexões e direção do fluxo (AEM); pesos; seleção progressiva (forward.sel, alfa, "
+        "R² ajustado); autovetores retidos; fração espacial na partição de variância",
     ),
     (
         r"\bvarpart\s*\(",
@@ -513,9 +523,19 @@ def rel(p: Path, raiz: Path) -> str:
 # ---------------------------------------------------------------------------
 # 1. scripts
 # ---------------------------------------------------------------------------
+def eh_script(p: Path) -> bool:
+    n = p.name.lower()
+    return p.suffix.lower() in SCRIPT_EXT or n.endswith(SCRIPT_TXT_EXT)
+
+
+def nome_base_script(nome: str) -> str:
+    n = nome.lower()
+    return n[:-4] if n.endswith(SCRIPT_TXT_EXT) else n
+
+
 def analisar_script(p: Path, raiz: Path) -> dict:
     texto_bruto = ler_texto(p)
-    py = p.suffix.lower() == ".py"
+    py = nome_base_script(p.name).endswith(".py")
     linhas = texto_bruto.splitlines()
     texto = "\n".join(sem_comentario(l, py) for l in linhas)
 
@@ -579,9 +599,11 @@ def analisar_script(p: Path, raiz: Path) -> dict:
             entradas.append(arqs[0])
     entradas = sorted(set(entradas))
 
+    # análises procuradas no código, não dentro de strings (source("09_CWM.R") não é CWM)
+    texto_sem_str = STR_LIT.sub(lambda m: '"' + " " * (len(m.group(0)) - 2) + '"', texto)
     analises = []
     for rx, nome, pacote, exige in ANALISES:
-        linhas_hit = [linha_de(texto, m.start()) for m in re.finditer(rx, texto)]
+        linhas_hit = [linha_de(texto_sem_str, m.start()) for m in re.finditer(rx, texto_sem_str)]
         if linhas_hit:
             analises.append(
                 {"analise": nome, "pacote": pacote, "linhas": linhas_hit[:8], "exige": exige}
@@ -618,10 +640,25 @@ def analisar_script(p: Path, raiz: Path) -> dict:
         r"\b(?:title|x|y|fill|colour|color|caption|subtitle)\s*=\s*[\"']([^\"']{3,120})[\"']", texto
     )
 
+    # scripts chamados por este (run_all_figures.R -> source("09_....R"))
+    fontes = sorted(
+        {
+            Path(x.replace("\\", "/")).name
+            for x in re.findall(
+                r"\bsource\s*\(\s*(?:file\s*=\s*)?[^)]*?[\"']([^\"']+\.[Rr](?:md)?)[\"']", texto
+            )
+        }
+    )
+    conteudo = re.sub(r"\s+", " ", texto_bruto).strip().encode("utf-8", "replace")
+
     st = p.stat()
     return {
         "caminho": rel(p, raiz),
         "nome": p.name,
+        "base": nome_base_script(p.name),
+        "hash": hashlib.sha1(conteudo, usedforsecurity=False).hexdigest(),
+        "mtime": st.st_mtime,
+        "fontes": fontes,
         "linhas": len(linhas),
         "modificado": dt.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
         "pacotes": pacotes,
@@ -695,9 +732,10 @@ def ligar_imagens(imagens: list[Path], scripts: list[dict], raiz: Path) -> list[
         linhas.append(
             {
                 "imagem": rel(img, raiz),
+                "pasta": rel(img.parent, raiz),
                 "modificada": dt.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
                 "scripts": unicos,
-                "confianca": confianca or "nenhum script encontrado (figura órfã)",
+                "confianca": confianca or "nenhum script encontrado (órfão)",
                 "sha1": sha1(img),
                 "dim": dimensoes(img.read_bytes()[:65536])
                 if img.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp"}
@@ -1114,6 +1152,10 @@ def auditar_docx(caminho: Path, imagens_info: list[dict], scripts: list[dict]) -
             "referência cruzada quebrada",
         ),
         (r"\bXX+\b|\?\?+|TODO|COMPLETAR|inserir aqui", "trecho a completar"),
+        (
+            r"\[(?:please|reference|Thesis|Protocol|Institution)[^\]]*\]",
+            "marcador editorial não resolvido ([please ...], [Thesis ...])",
+        ),
         (r"\bexeto\b", "exeto → exceto"),
         (r"\bapartir\b", "apartir → a partir"),
         (r"\bralação\b", "ralação → relação"),
@@ -1219,8 +1261,53 @@ def md_escape(s: str) -> str:
     return (s or "").replace("|", "\\|").replace("\n", " ")
 
 
-def gerar_saida(raiz: Path, saida: Path, scripts, imagens_info, aud, relatorio: Path | None):
+def relacoes_scripts(scripts: list[dict]) -> tuple[dict, list[dict]]:
+    """chamado_por[base] = [scripts que fazem source()]; grupos de cópias com o mesmo nome."""
+    chamado_por = defaultdict(list)
+    for s in scripts:
+        for alvo in s["fontes"]:
+            chamado_por[nome_base_script(alvo)].append(s["caminho"])
+    grupos = defaultdict(list)
+    for s in scripts:
+        grupos[s["base"]].append(s)
+    copias = []
+    for base, lst in sorted(grupos.items()):
+        if len(lst) < 2:
+            continue
+        hashes = {s["hash"] for s in lst}
+        mais_novo = max(lst, key=lambda s: s["mtime"])
+        copias.append(
+            {
+                "base": base,
+                "scripts": [s["caminho"] for s in lst],
+                "situacao": "idênticas"
+                if len(hashes) == 1
+                else f"DIVERGENTES ({len(hashes)} versões)",
+                "mais_novo": mais_novo["caminho"],
+            }
+        )
+    return chamado_por, copias
+
+
+def info_copias(s: dict, copias: list[dict]) -> str:
+    for c in copias:
+        if s["caminho"] in c["scripts"]:
+            outras = [x for x in c["scripts"] if x != s["caminho"]]
+            return f"cópias {c['situacao']}: {', '.join(outras)}; mais recente: {c['mais_novo']}"
+    return ""
+
+
+def gerar_saida(
+    raiz: Path,
+    saida: Path,
+    scripts,
+    imagens_info,
+    aud,
+    relatorio: Path | None,
+    resultados_info=(),
+):
     saida.mkdir(parents=True, exist_ok=True)
+    chamado_por, copias = relacoes_scripts(scripts)
 
     escrever_csv(
         saida / "01_inventario_scripts.csv",
@@ -1236,6 +1323,9 @@ def gerar_saida(raiz: Path, saida: Path, scripts, imagens_info, aud, relatorio: 
             "entradas",
             "parametros",
             "pacotes",
+            "chama_via_source",
+            "chamado_por",
+            "copias",
         ],
         [
             [
@@ -1276,10 +1366,29 @@ def gerar_saida(raiz: Path, saida: Path, scripts, imagens_info, aud, relatorio: 
                 ", ".join(s["entradas"]),
                 " | ".join(f"{k}={','.join(v)}" for k, v in s["params"].items()),
                 ", ".join(s["pacotes"]),
+                ", ".join(s["fontes"]),
+                ", ".join(chamado_por.get(s["base"], [])),
+                info_copias(s, copias),
             ]
             for s in scripts
         ],
     )
+
+    if resultados_info:
+        escrever_csv(
+            saida / "05_resultados_texto.csv",
+            ["arquivo_resultado", "modificado", "script(s)", "linha", "confianca"],
+            [
+                [
+                    r["imagem"],
+                    r["modificada"],
+                    " | ".join(s["caminho"] for s, _, _ in r["scripts"]),
+                    " | ".join(str(ln or "?") for _, ln, _ in r["scripts"]),
+                    r["confianca"],
+                ]
+                for r in resultados_info
+            ],
+        )
 
     usadas_no_rel = defaultdict(list)
     if aud:
@@ -1443,6 +1552,11 @@ def gerar_saida(raiz: Path, saida: Path, scripts, imagens_info, aud, relatorio: 
                         f"- **Script:** `{s['caminho']}`{(' linha ' + str(ln)) if ln else ''} — análises: "
                         f"{', '.join(a['analise'] for a in s['analises']) or 'nenhuma detectada'}; gráfico: {', '.join(s['graficos']) or '?'}"
                     )
+                    extra = info_copias(s, copias)
+                    if chamado_por.get(s["base"]):
+                        add(f"  - executado por: {', '.join(chamado_por[s['base']])}")
+                    if extra:
+                        add(f"  - ⚠ {extra}")
                     exige = {a["analise"]: a["exige"] for a in s["analises"]}
                     for k, v in list(exige.items())[:5]:
                         add(f"  - *{k}* → a legenda/métodos devem informar: {v}")
@@ -1556,6 +1670,34 @@ def gerar_saida(raiz: Path, saida: Path, scripts, imagens_info, aud, relatorio: 
             add(f"- `{i['imagem']}` ({i['modificada']})")
         add("")
 
+    if copias:
+        add("## 11. Scripts com o mesmo nome em mais de uma pasta\n")
+        add(
+            "Antes de citar um script como fonte de uma figura, confirme qual cópia é a vigente. "
+            "Cópias DIVERGENTES podem gerar números diferentes do que está no relatório.\n"
+        )
+        for c in copias:
+            add(f"- **{c['base']}** — {c['situacao']}; mais recente: `{c['mais_novo']}`")
+            for x in c["scripts"]:
+                add(f"  - `{x}`")
+        add("")
+    if chamado_por:
+        add("## 12. Encadeamento de scripts (source)\n")
+        for alvo, quem in sorted(chamado_por.items()):
+            add(f"- `{alvo}` é executado por: {', '.join('`' + q + '`' for q in quem)}")
+        add("")
+    if resultados_info:
+        add("## 13. Resultados em texto/tabela → script que os gera\n")
+        add(
+            "Use para rastrear de onde vêm os números citados no texto (R², p, pseudo-F, IndVal...).\n"
+        )
+        for r in resultados_info:
+            scr = ", ".join(
+                f"`{s['caminho']}`{(' l.' + str(ln)) if ln else ''}" for s, ln, _ in r["scripts"]
+            )
+            add(f"- `{r['imagem']}` ← {scr or '**script não identificado**'}")
+        add("")
+
     (saida / "04_diagnostico_relatorio.md").write_text("\n".join(L), encoding="utf-8")
 
 
@@ -1590,7 +1732,7 @@ def main(argv=None):
     saida = Path(a.saida).resolve() if a.saida else raiz / "_auditoria_relatorio"
 
     arquivos = list(iter_arquivos(raiz))
-    scripts = [analisar_script(p, raiz) for p in arquivos if p.suffix.lower() in SCRIPT_EXT]
+    scripts = [analisar_script(p, raiz) for p in arquivos if eh_script(p)]
     imagens = [p for p in arquivos if p.suffix.lower() in IMAGE_EXT]
     relatorio = Path(a.relatorio).resolve() if a.relatorio else escolher_relatorio(raiz)
     if relatorio:
@@ -1600,6 +1742,22 @@ def main(argv=None):
     )
 
     imagens_info = ligar_imagens(imagens, scripts, raiz)
+    # arquivos de resultado (saidas/*.txt, *.csv) declarados pelos scripts ou em pastas de saída
+    declarados = {
+        stem_norm(a)
+        for sc in scripts
+        for o in sc["saidas"]
+        for a in o["arquivos"]
+        if Path(a).suffix.lower() in TABLE_EXT
+    }
+    resultados = [
+        p
+        for p in arquivos
+        if p.suffix.lower() in {".txt", ".csv", ".xlsx", ".tsv", ".html"}
+        and not eh_script(p)
+        and (stem_norm(p.name) in declarados or RESULT_DIRS & {norm(x) for x in p.parent.parts})
+    ]
+    resultados_info = ligar_imagens(resultados, scripts, raiz)
     aud = None
     if relatorio and relatorio.exists():
         try:
@@ -1608,7 +1766,7 @@ def main(argv=None):
             print(
                 f"Não foi possível ler o .docx ({e}). Salve-o como .docx (não .doc) e feche-o no Word."
             )
-    gerar_saida(raiz, saida, scripts, imagens_info, aud, relatorio)
+    gerar_saida(raiz, saida, scripts, imagens_info, aud, relatorio, resultados_info)
     print(f"Pronto. Abra: {saida / '04_diagnostico_relatorio.md'}")
 
 
