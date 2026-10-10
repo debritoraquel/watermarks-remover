@@ -6,6 +6,8 @@ Ferramentas para organizar o relatório do fitoplâncton do Lajeado São José (
 |---|---|
 | `mapear_figuras.py` | Auditor automático (somente leitura). Varre scripts, imagens e o `.docx`. |
 | `GUIA_legendas_e_estrutura.md` | Padrão científico de legenda por tipo de análise, tabelas obrigatórias e estrutura do relatório. |
+| `Modelo_Relatorio_Fitoplancton.docx` | Modelo Word do relatório (5 partes, 13 capítulos) com 28 figuras e 16 tabelas já posicionadas, legendas-modelo, numeração automática (Inserir Legenda/SEQ), sumário e apêndice de rastreabilidade. Ao abrir, aceite "atualizar campos". |
+| `gerar_modelo_relatorio.js` | Gera o modelo de novo (`node gerar_modelo_relatorio.js`), se você quiser mudar a estrutura. |
 
 ## Como rodar no seu computador (Windows)
 
